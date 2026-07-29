@@ -1,0 +1,597 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Dungeon Slayer: Realtime RPG Clicker</title>
+    <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@700;900&family=Poppins:wght@400;600;700&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --bg-color: #0f0c1b;
+            --panel-bg: rgba(26, 20, 43, 0.9);
+            --border-color: #4a3b69;
+            --primary-glow: #ff9d00;
+            --accent-glow: #ff2a5f;
+            --gold: #ffd700;
+            --diamond: #00e1ff;
+            --text-color: #f0e6ff;
+            --text-dim: #9a8bb5;
+            --success: #28a745;
+        }
+
+        * { box-sizing: border-box; margin: 0; padding: 0; user-select: none; }
+
+        body {
+            font-family: 'Poppins', sans-serif;
+            background-color: var(--bg-color);
+            background-image: radial-gradient(circle at 50% 30%, #2c1b4d 0%, #0f0c1b 70%);
+            color: var(--text-color);
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            overflow-x: hidden;
+        }
+
+        /* Modal Auth */
+        .modal-overlay {
+            position: fixed;
+            top: 0; left: 0; width: 100%; height: 100%;
+            background: rgba(8, 5, 15, 0.95);
+            backdrop-filter: blur(8px);
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            z-index: 1000;
+        }
+
+        .auth-card {
+            background: var(--panel-bg);
+            border: 2px solid var(--primary-glow);
+            box-shadow: 0 0 25px rgba(255, 157, 0, 0.3);
+            border-radius: 16px;
+            padding: 30px;
+            width: 360px;
+            text-align: center;
+        }
+
+        .auth-card h2 {
+            font-family: 'Cinzel', serif;
+            color: var(--gold);
+            margin-bottom: 20px;
+            font-size: 1.8rem;
+        }
+
+        .input-group { margin-bottom: 15px; text-align: left; }
+        .input-group label { display: block; font-size: 0.85rem; color: var(--text-dim); margin-bottom: 5px; }
+
+        .auth-input {
+            width: 100%;
+            background: rgba(15, 12, 27, 0.9);
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            padding: 10px 12px;
+            color: #fff;
+            font-family: 'Poppins', sans-serif;
+            font-size: 1rem;
+            outline: none;
+        }
+
+        .btn-auth {
+            width: 100%;
+            background: linear-gradient(135deg, #ff9d00, #ff5500);
+            color: #fff;
+            border: none;
+            padding: 12px;
+            font-family: 'Cinzel', serif;
+            font-weight: bold;
+            font-size: 1rem;
+            border-radius: 8px;
+            cursor: pointer;
+            margin-top: 10px;
+            box-shadow: 0 4px 15px rgba(255, 85, 0, 0.4);
+        }
+
+        .auth-toggle { margin-top: 15px; font-size: 0.85rem; color: var(--text-dim); }
+        .auth-toggle span { color: var(--gold); cursor: pointer; text-decoration: underline; }
+
+        /* Layout Main UI */
+        header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 15px 30px;
+            background: rgba(20, 15, 33, 0.9);
+            border-bottom: 2px solid var(--border-color);
+        }
+
+        h1 { font-family: 'Cinzel', serif; font-size: 1.8rem; color: var(--gold); text-shadow: 0 0 10px rgba(255, 215, 0, 0.5); }
+
+        .user-badge {
+            font-family: 'Cinzel', serif;
+            font-size: 0.9rem;
+            color: var(--gold);
+            background: rgba(255, 215, 0, 0.1);
+            padding: 6px 14px;
+            border-radius: 20px;
+            border: 1px solid var(--gold);
+        }
+
+        .container {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 20px;
+            max-width: 1100px;
+            margin: 20px auto;
+            padding: 0 20px;
+            width: 100%;
+            flex: 1;
+        }
+
+        @media (max-width: 850px) { .container { grid-template-columns: 1fr; } }
+
+        .panel {
+            background: var(--panel-bg);
+            border: 1px solid var(--border-color);
+            border-radius: 16px;
+            padding: 24px;
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.6);
+            display: flex;
+            flex-direction: column;
+        }
+
+        /* Monster Attack Area */
+        .clicker-section { display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; }
+        
+        .gold-count { font-family: 'Cinzel', serif; font-size: 2.8rem; font-weight: 900; color: var(--gold); text-shadow: 0 0 15px rgba(255, 215, 0, 0.4); }
+
+        .monster-box {
+            width: 180px; height: 180px;
+            border-radius: 50%;
+            background: radial-gradient(circle, #3a1c5c 0%, #170a2c 100%);
+            border: 4px solid var(--accent-glow);
+            box-shadow: 0 0 30px rgba(255, 42, 95, 0.4);
+            cursor: pointer; outline: none; margin: 20px 0;
+            display: flex; flex-direction: column; align-items: center; justify-content: center;
+            transition: transform 0.05s ease;
+            position: relative;
+        }
+
+        .monster-box:active { transform: scale(0.92); }
+        .monster-icon { font-size: 80px; }
+
+        .floating-dmg {
+            position: absolute;
+            font-family: 'Cinzel', serif;
+            font-weight: bold;
+            font-size: 1.5rem;
+            color: #ff3333;
+            text-shadow: 0 0 8px #000;
+            pointer-events: none;
+            animation: floatUp 0.8s ease-out forwards;
+        }
+
+        @keyframes floatUp {
+            0% { opacity: 1; transform: translateY(0) scale(1); }
+            100% { opacity: 0; transform: translateY(-60px) scale(1.3); }
+        }
+
+        /* Tabs Navigation */
+        .tabs { display: flex; gap: 8px; margin-bottom: 15px; border-bottom: 1px solid var(--border-color); padding-bottom: 10px; }
+        .tab-btn { background: transparent; border: none; color: var(--text-dim); font-family: 'Cinzel', serif; font-size: 0.9rem; cursor: pointer; padding: 6px 12px; }
+        .tab-btn.active { color: #fff; background: rgba(255, 157, 0, 0.2); border-bottom: 2px solid var(--primary-glow); }
+
+        .tab-content { display: none; flex: 1; }
+        .tab-content.active { display: flex; flex-direction: column; }
+
+        .list-container { display: flex; flex-direction: column; gap: 10px; overflow-y: auto; max-height: 380px; }
+
+        .item-card {
+            background: rgba(15, 12, 27, 0.7);
+            border: 1px solid var(--border-color);
+            border-radius: 10px; padding: 12px 16px;
+            display: flex; align-items: center; justify-content: space-between;
+        }
+
+        .pulse-live {
+            width: 8px; height: 8px; background: var(--success);
+            border-radius: 50%; display: inline-block;
+            box-shadow: 0 0 8px var(--success);
+            animation: blink 1s infinite alternate;
+        }
+        @keyframes blink { from { opacity: 0.3; } to { opacity: 1; } }
+
+        .btn-claim {
+            background: linear-gradient(135deg, #00c853, #009624);
+            color: #fff; border: none; padding: 6px 14px;
+            font-family: 'Cinzel', serif; font-size: 0.8rem; font-weight: bold;
+            border-radius: 6px; cursor: pointer;
+        }
+        .btn-claim.claimed { background: var(--border-color); color: var(--text-dim); cursor: not-allowed; }
+
+        .btn-action { background: transparent; border: 1px solid var(--border-color); color: var(--text-dim); padding: 8px 16px; border-radius: 6px; cursor: pointer; }
+    </style>
+</head>
+<body>
+
+    <!-- AUTHENTICATION MODAL -->
+    <div class="modal-overlay" id="auth-modal">
+        <div class="auth-card">
+            <h2 id="auth-title">HERO LOGIN</h2>
+            <div class="input-group">
+                <label>NICKNAME HERO</label>
+                <input type="text" id="auth-username" class="auth-input" placeholder="Nama Hero kamu..." maxlength="15">
+            </div>
+            <div class="input-group">
+                <label>PASSWORD</label>
+                <input type="password" id="auth-password" class="auth-input" placeholder="Password rahasia...">
+            </div>
+            <button class="btn-auth" id="auth-submit-btn">ENTER DUNGEON</button>
+            <div class="auth-toggle">
+                <span id="auth-toggle-text">Belum punya akun? Bikin Hero Baru</span>
+            </div>
+        </div>
+    </div>
+
+    <!-- MAIN HEADER -->
+    <header>
+        <h1>⚔️ DUNGEON SLAYER</h1>
+        <div style="display:flex; align-items:center; gap:12px;">
+            <div class="user-badge" id="user-display-name">Guest Hero</div>
+            <button class="btn-action" id="logout-btn" style="padding: 4px 10px; font-size: 0.8rem;">LOGOUT</button>
+        </div>
+    </header>
+
+    <div class="container">
+        <!-- Attack Monster Area -->
+        <div class="panel clicker-section">
+            <div style="font-size: 0.9rem; color: var(--text-dim);">TOTAL GOLD EARNED</div>
+            <div class="gold-count" id="gold-count">0 🪙</div>
+            <div style="color:var(--accent-glow); font-size: 1.1rem; font-weight:600;"><span id="dps-count">0</span> DPS (Auto Damage)</div>
+
+            <button class="monster-box" id="click-btn">
+                <div class="monster-icon" id="monster-icon">👾</div>
+                <div style="font-family:'Cinzel'; color:#fff; font-size:0.9rem; margin-top:5px;">ATTACK!</div>
+            </button>
+            <div style="font-size:0.85rem; color:var(--text-dim);">Click Monster to Earn Gold!</div>
+        </div>
+
+        <!-- Right Side Tabs -->
+        <div class="panel">
+            <div class="tabs">
+                <button class="tab-btn active" onclick="switchTab('upgrades')">⚔️ Weapons</button>
+                <button class="tab-btn" onclick="switchTab('rewards')">🎁 Quests & Prizes</button>
+                <button class="tab-btn" onclick="switchTab('scoreboard')"><span class="pulse-live"></span> Top Heroes</button>
+            </div>
+
+            <!-- Tab 1: Weapons & Upgrades -->
+            <div class="tab-content active" id="tab-upgrades">
+                <div class="list-container" id="upgrades-list"></div>
+            </div>
+
+            <!-- Tab 2: Quests & Prizes -->
+            <div class="tab-content" id="tab-rewards">
+                <div class="list-container" id="rewards-list">
+                    <div class="item-card" style="border-color: var(--gold);">
+                        <div>
+                            <h3 style="color:var(--gold); font-family:'Cinzel';">Daily Hero Chest</h3>
+                            <p style="font-size:0.85rem; color:var(--text-dim);">Dapatkan +1,000 Gold gratis setiap hari!</p>
+                        </div>
+                        <button class="btn-claim" id="claim-daily-btn">CLAIM</button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Tab 3: Realtime Scoreboard -->
+            <div class="tab-content" id="tab-scoreboard">
+                <div style="font-size: 0.8rem; color: var(--text-dim); margin-bottom: 8px;">
+                    ⚡ Peringkat terupdate secara **Real-time** dari Cloud
+                </div>
+                <div class="list-container" id="scoreboard-list"></div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Firebase SDKs -->
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-app.js";
+        import { getDatabase, ref, set, get, onValue } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-database.js";
+
+        // Firebase Setup
+        const firebaseConfig = {
+            databaseURL: "https://mamang-e83d7-default-rtdb.asia-southeast1.firebasedatabase.app/"
+        };
+        const app = initializeApp(firebaseConfig);
+        const db = getDatabase(app);
+
+        // State Management
+        let currentUser = null;
+        let isRegisterMode = false;
+        let gameState = {
+            gold: 0,
+            totalGoldEarned: 0,
+            clickPower: 1,
+            dps: 0,
+            lastDailyClaim: 0,
+            claimedQuests: [],
+            upgrades: [
+                { id: 'dagger', name: 'Rusty Dagger', baseCost: 15, cost: 15, dps: 1, clickAdd: 0, count: 0 },
+                { id: 'ironSword', name: 'Iron Broadsword', baseCost: 100, cost: 100, dps: 0, clickAdd: 2, count: 0 },
+                { id: 'bow', name: 'Hunter Bow', baseCost: 500, cost: 500, dps: 10, clickAdd: 0, count: 0 },
+                { id: 'fireStaff', name: 'Fire Mage Staff', baseCost: 3000, cost: 3000, dps: 50, clickAdd: 5, count: 0 }
+            ]
+        };
+
+        const questList = [
+            { id: 'q_1k', title: 'Goblin Slayer', req: 1000, reward: 500, desc: 'Kumpulkan total 1,000 Gold' },
+            { id: 'q_50k', title: 'Dungeon Master', req: 50000, reward: 15000, desc: 'Kumpulkan total 50,000 Gold' },
+            { id: 'q_1m', title: 'Legendary Hero', req: 1000000, reward: 300000, desc: 'Kumpulkan total 1,000,000 Gold' }
+        ];
+
+        // UI DOM Elements
+        const authModal = document.getElementById('auth-modal');
+        const authTitle = document.getElementById('auth-title');
+        const authUsernameInput = document.getElementById('auth-username');
+        const authPasswordInput = document.getElementById('auth-password');
+        const authSubmitBtn = document.getElementById('auth-submit-btn');
+        const authToggleText = document.getElementById('auth-toggle-text');
+        const userDisplayName = document.getElementById('user-display-name');
+        const clickBtn = document.getElementById('click-btn');
+        const goldCountEl = document.getElementById('gold-count');
+        const dpsCountEl = document.getElementById('dps-count');
+
+        // Authentication Handlers
+        authToggleText.addEventListener('click', () => {
+            isRegisterMode = !isRegisterMode;
+            authTitle.textContent = isRegisterMode ? "NEW HERO REGISTER" : "HERO LOGIN";
+            authSubmitBtn.textContent = isRegisterMode ? "CREATE HERO" : "ENTER DUNGEON";
+            authToggleText.innerHTML = isRegisterMode ? "Sudah punya akun? <span>Login di sini</span>" : "Belum punya akun? <span>Bikin Hero Baru</span>";
+        });
+
+        authSubmitBtn.addEventListener('click', async () => {
+            const user = authUsernameInput.value.trim().toLowerCase();
+            const pass = authPasswordInput.value.trim();
+
+            if (!user || !pass) return alert("Isi Username dan Password!");
+
+            const userRef = ref(db, 'heroes/' + user);
+            const snapshot = await get(userRef);
+
+            if (isRegisterMode) {
+                if (snapshot.exists()) return alert("Nama Hero ini sudah terpakai!");
+                await set(userRef, { password: pass, totalGoldEarned: 0, gold: 0 });
+                alert("Hero berhasil dibuat! Silakan Login.");
+                isRegisterMode = false;
+                authToggleText.click();
+            } else {
+                if (!snapshot.exists() || snapshot.val().password !== pass) {
+                    return alert("Username / Password salah!");
+                }
+                login(user);
+            }
+        });
+
+        function login(user) {
+            currentUser = user;
+            localStorage.setItem('dungeon_hero', user);
+            userDisplayName.textContent = `⚔️ ${user}`;
+            authModal.style.display = 'none';
+            loadCloudData();
+            listenRealtimeLeaderboard();
+        }
+
+        // Database Cloud Syncing
+        async function loadCloudData() {
+            const userRef = ref(db, 'heroes/' + currentUser);
+            const snapshot = await get(userRef);
+            if (snapshot.exists()) {
+                const data = snapshot.val();
+                gameState.gold = data.gold || 0;
+                gameState.totalGoldEarned = data.totalGoldEarned || 0;
+                gameState.lastDailyClaim = data.lastDailyClaim || 0;
+                gameState.claimedQuests = data.claimedQuests || [];
+                if (data.upgrades) gameState.upgrades = data.upgrades;
+                recalculate();
+            }
+        }
+
+        function syncToCloud() {
+            if (!currentUser) return;
+            set(ref(db, 'heroes/' + currentUser + '/gold'), Math.floor(gameState.gold));
+            set(ref(db, 'heroes/' + currentUser + '/totalGoldEarned'), Math.floor(gameState.totalGoldEarned));
+            set(ref(db, 'heroes/' + currentUser + '/lastDailyClaim'), gameState.lastDailyClaim);
+            set(ref(db, 'heroes/' + currentUser + '/claimedQuests'), gameState.claimedQuests);
+            set(ref(db, 'heroes/' + currentUser + '/upgrades'), gameState.upgrades);
+        }
+
+        // Realtime Scoreboard Reader
+        function listenRealtimeLeaderboard() {
+            onValue(ref(db, 'heroes'), (snapshot) => {
+                const data = snapshot.val();
+                if (!data) return;
+
+                let board = [];
+                Object.keys(data).forEach(u => {
+                    board.push({ name: u, score: data[u].totalGoldEarned || 0 });
+                });
+
+                board.sort((a, b) => b.score - a.score);
+                renderScoreboard(board);
+            });
+        }
+
+        function renderScoreboard(board) {
+            const container = document.getElementById('scoreboard-list');
+            container.innerHTML = '';
+
+            board.slice(0, 10).forEach((item, index) => {
+                const isMe = item.name === currentUser;
+                const card = document.createElement('div');
+                card.className = 'item-card';
+                if (isMe) card.style.borderColor = 'var(--gold)';
+
+                card.innerHTML = `
+                    <div style="display:flex; gap:10px; align-items:center;">
+                        <span style="font-family:'Cinzel'; color:var(--primary-glow); font-weight:bold;">#${index + 1}</span>
+                        <span style="color:${isMe ? 'var(--gold)' : '#fff'}; font-weight:bold;">${item.name} ${isMe ? '(You)' : ''}</span>
+                    </div>
+                    <div style="font-family:'Cinzel'; color:var(--gold); font-weight:bold;">${Math.floor(item.score).toLocaleString()} 🪙</div>
+                `;
+                container.appendChild(card);
+            });
+        }
+
+        // Gameplay Engine
+        clickBtn.addEventListener('click', (e) => {
+            gameState.gold += gameState.clickPower;
+            gameState.totalGoldEarned += gameState.clickPower;
+
+            // Damage Pop-up Effect
+            const rect = clickBtn.getBoundingClientRect();
+            const floating = document.createElement('div');
+            floating.className = 'floating-dmg';
+            floating.textContent = `+${gameState.clickPower}`;
+            floating.style.left = `${e.clientX - rect.left + (Math.random()-0.5)*30}px`;
+            floating.style.top = `${e.clientY - rect.top}px`;
+            clickBtn.appendChild(floating);
+            setTimeout(() => floating.remove(), 800);
+
+            updateUI();
+        });
+
+        function recalculate() {
+            let dps = 0;
+            let clickAdd = 0;
+            gameState.upgrades.forEach(u => {
+                dps += (u.dps * u.count);
+                clickAdd += ((u.clickAdd || 0) * u.count);
+            });
+            gameState.dps = dps;
+            gameState.clickPower = 1 + clickAdd;
+            renderUpgrades();
+            updateUI();
+        }
+
+        function renderUpgrades() {
+            const container = document.getElementById('upgrades-list');
+            container.innerHTML = '';
+            gameState.upgrades.forEach(u => {
+                const card = document.createElement('div');
+                card.className = 'item-card';
+                card.onclick = () => {
+                    if (gameState.gold >= u.cost) {
+                        gameState.gold -= u.cost;
+                        u.count++;
+                        u.cost = Math.floor(u.baseCost * Math.pow(1.15, u.count));
+                        recalculate();
+                        syncToCloud();
+                    }
+                };
+                card.innerHTML = `
+                    <div>
+                        <div style="color:#fff; font-weight:bold; font-family:'Cinzel';">${u.name} (${u.count})</div>
+                        <div style="font-size:0.8rem; color:var(--text-dim);">+${u.dps} DPS / +${u.clickAdd || 0} Click</div>
+                    </div>
+                    <div style="font-family:'Cinzel'; color:var(--gold); font-weight:bold;">${u.cost.toLocaleString()} 🪙</div>
+                `;
+                container.appendChild(card);
+            });
+        }
+
+        function renderRewards() {
+            const dailyBtn = document.getElementById('claim-daily-btn');
+            const now = Date.now();
+            if (now - gameState.lastDailyClaim < 86400000) {
+                dailyBtn.textContent = "CLAIMED";
+                dailyBtn.classList.add('claimed');
+                dailyBtn.onclick = null;
+            } else {
+                dailyBtn.textContent = "CLAIM";
+                dailyBtn.classList.remove('claimed');
+                dailyBtn.onclick = () => {
+                    gameState.gold += 1000;
+                    gameState.totalGoldEarned += 1000;
+                    gameState.lastDailyClaim = Date.now();
+                    alert("Claimed +1,000 Gold Daily Reward!");
+                    renderRewards();
+                    updateUI();
+                    syncToCloud();
+                };
+            }
+
+            // Quests Render
+            document.querySelectorAll('.quest-card').forEach(e => e.remove());
+            const list = document.getElementById('rewards-list');
+
+            questList.forEach(q => {
+                const isClaimed = gameState.claimedQuests.includes(q.id);
+                const canClaim = gameState.totalGoldEarned >= q.req && !isClaimed;
+
+                const card = document.createElement('div');
+                card.className = 'item-card quest-card';
+                card.innerHTML = `
+                    <div>
+                        <h3 style="color:#fff; font-family:'Cinzel';">${q.title}</h3>
+                        <p style="font-size:0.8rem; color:var(--text-dim);">${q.desc}</p>
+                    </div>
+                    <button class="btn-claim ${isClaimed ? 'claimed' : ''}" id="${q.id}">${isClaimed ? 'CLAIMED' : 'PRIZE: +' + q.reward}</button>
+                `;
+                list.appendChild(card);
+
+                if (canClaim) {
+                    card.querySelector(`#${q.id}`).onclick = () => {
+                        gameState.gold += q.reward;
+                        gameState.claimedQuests.push(q.id);
+                        alert(`Quest Done! Gift: +${q.reward} Gold`);
+                        renderRewards();
+                        updateUI();
+                        syncToCloud();
+                    };
+                }
+            });
+        }
+
+        function updateUI() {
+            goldCountEl.textContent = `${Math.floor(gameState.gold).toLocaleString()} 🪙`;
+            dpsCountEl.textContent = gameState.dps.toLocaleString();
+        }
+
+        window.switchTab = function(tab) {
+            document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+            document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+
+            if (tab === 'upgrades') {
+                document.querySelectorAll('.tab-btn')[0].classList.add('active');
+                document.getElementById('tab-upgrades').classList.add('active');
+            } else if (tab === 'rewards') {
+                document.querySelectorAll('.tab-btn')[1].classList.add('active');
+                document.getElementById('tab-rewards').classList.add('active');
+                renderRewards();
+            } else {
+                document.querySelectorAll('.tab-btn')[2].classList.add('active');
+                document.getElementById('tab-scoreboard').classList.add('active');
+            }
+        };
+
+        // Game Loop (Auto Damage per 100ms)
+        setInterval(() => {
+            if (gameState.dps > 0) {
+                gameState.gold += gameState.dps / 10;
+                gameState.totalGoldEarned += gameState.dps / 10;
+                updateUI();
+            }
+        }, 100);
+
+        // Sync to cloud every 3s
+        setInterval(syncToCloud, 3000);
+
+        // Auto login session
+        const savedHero = localStorage.getItem('dungeon_hero');
+        if (savedHero) login(savedHero);
+
+        document.getElementById('logout-btn').addEventListener('click', () => {
+            localStorage.removeItem('dungeon_hero');
+            location.reload();
+        });
+    </script>
+</body>
+</html>
