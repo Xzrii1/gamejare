@@ -452,6 +452,941 @@
 </section>
 
 <script type="module">
+/* ============================================================
+   FIREBASE — DIMUAT SECARA DINAMIS (BUKAN import STATIS DI ATAS)
+   -----------------------------------------------------------------
+   PENTING: kalau "import" ditaruh sebagai statement statis paling atas
+   file (seperti versi sebelumnya) dan baris itu GAGAL dimuat (koneksi ke
+   gstatic.com lambat/diblokir/offline), maka SELURUH <script type="module">
+   ini gagal dieksekusi dari awal — termasuk semua addEventListener tombol
+   menu (Start/Options/Credits) yang letaknya ratusan baris di bawah.
+   Itulah kenapa tombol jadi terkesan "gak bisa diklik" sama sekali.
+
+   Solusinya: Firebase dimuat lewat dynamic import() di dalam try/catch,
+   dibungkus terpisah dari kode UI utama, dan dijalankan belakangan
+   (non-blocking). Semua tombol & navigasi layar SEKARANG di-bind duluan,
+   tidak peduli Firebase berhasil dimuat atau tidak.
+   ============================================================ */
+
+/* GANTI URL INI DENGAN DATABASE FIREBASE KAMU SENDIRI
+   1. https://console.firebase.google.com -> buat project
+   2. Build -> Realtime Database -> Create Database -> mode test
+   3. Tab "Rules" -> { "rules": { ".read": true, ".write": true } } -> Publish
+   4. Copy URL yang tertera di atas data (https://NAMA-default-rtdb.REGION.firebasedatabase.app) */
+const FIREBASE_DB_URL = "https://GANTI-DENGAN-URL-DATABASE-KAMU.firebasedatabase.app";
+
+let db = null;
+let firebaseReady = false;
+let firebaseFns = null; // { ref, set, get, onValue, off }
+
+async function initFirebase() {
+  if (!FIREBASE_DB_URL || FIREBASE_DB_URL.includes('GANTI-DENGAN-URL')) {
+    console.warn('Firebase databaseURL belum diisi — mode offline aktif.');
+    return;
+  }
+  try {
+    const [{ initializeApp }, dbMod] = await Promise.all([
+      import("https://www.gstatic.com/firebasejs/10.8.0/firebase-app.js"),
+      import("https://www.gstatic.com/firebasejs/10.8.0/firebase-database.js")
+    ]);
+    const app = initializeApp({ databaseURL: FIREBASE_DB_URL });
+    db = dbMod.getDatabase(app);
+    firebaseFns = { ref: dbMod.ref, set: dbMod.set, get: dbMod.get, onValue: dbMod.onValue, off: dbMod.off };
+    firebaseReady = true;
+    console.info('Firebase siap.');
+  } catch (err) {
+    console.warn('Firebase gagal dimuat, game jalan offline:', err);
+    firebaseReady = false;
+  }
+  // Update UI yang bergantung pada status Firebase, kalau layar auth sedang terbuka
+  if (typeof refreshFirebaseDependentUI === 'function') refreshFirebaseDependentUI();
+}
+// Non-blocking: dipanggil belakangan, tidak menahan kode di bawah ini.
+initFirebase();
+
+/* ============================================================
+   TOAST HELPER (pengganti alert() biar animasinya nyambung)
+   ============================================================ */
+function toast(msg) {
+  const stack = document.getElementById('toast-stack');
+  const el = document.createElement('div');
+  el.className = 'toast';
+  el.textContent = msg;
+  stack.appendChild(el);
+  setTimeout(() => el.remove(), 2700);
+}
+
+/* ============================================================
+   SCREEN MANAGER
+   Semua "layar" saling eksklusif lewat class .active (display:flex vs none).
+   Tidak ada lagi overlay modal yang bisa "nyangkut" nutupin klik seperti versi lama.
+   ============================================================ */
+const screens = ['start','auth','options','credits','game'];
+function showScreen(name) {
+  screens.forEach(s => {
+    document.getElementById('screen-' + s).classList.toggle('active', s === name);
+  });
+}
+
+document.getElementById('nav-start').addEventListener('click', () => {
+  if (currentUser) { showScreen('game'); } else { openAuth('login'); }
+});
+document.getElementById('nav-options').addEventListener('click', () => { refreshOptionsScreen(); showScreen('options'); });
+document.getElementById('nav-credits').addEventListener('click', () => showScreen('credits'));
+document.getElementById('opt-back').addEventListener('click', () => showScreen(currentUser ? 'game' : 'start'));
+document.getElementById('cred-back').addEventListener('click', () => showScreen(currentUser ? 'game' : 'start'));
+document.getElementById('auth-back').addEventListener('click', () => showScreen('start'));
+document.getElementById('hud-options-btn').addEventListener('click', () => { refreshOptionsScreen(); showScreen('options'); });
+
+/* ============================================================
+   STATE
+   ============================================================ */
+let currentUser = null;
+let isRegisterMode = false;
+let currentHpPercent = 100;
+let leaderboardUnsub = null;
+
+let gameState = {
+  gold: 0,
+  totalGoldEarned: 0,
+  clickPower: 1,
+  dps: 0,
+  lastDailyClaim: 0,
+  claimedQuests: [],
+  upgrades: [
+    { id: 'dagger',    name: 'Rusty Dagger',    icon: '🗡️', baseCost: 15,    cost: 15,    dps: 1,   clickAdd: 0,  count: 0 },
+    { id: 'ironSword', name: 'Iron Broadsword', icon: '⚔️', baseCost: 100,   cost: 100,   dps: 0,   clickAdd: 2,  count: 0 },
+    { id: 'bow',       name: 'Hunter Bow',      icon: '🏹', baseCost: 500,   cost: 500,   dps: 10,  clickAdd: 0,  count: 0 },
+    { id: 'fireStaff', name: 'Fire Staff',      icon: '🪄', baseCost: 3000,  cost: 3000,  dps: 50,  clickAdd: 5,  count: 0 },
+    { id: 'excalibur', name: 'Holy Excalibur',  icon: '🔱', baseCost: 15000, cost: 15000, dps: 200, clickAdd: 20, count: 0 }
+  ]
+};
+
+const questList = [
+  { id: 'q_1k',  title: 'Goblin Slayer',   req: 1000,    reward: 500,    desc: 'Kumpulkan total 1,000 Gold' },
+  { id: 'q_50k', title: 'Dungeon Master',  req: 50000,   reward: 15000,  desc: 'Kumpulkan total 50,000 Gold' },
+  { id: 'q_1m',  title: 'Legendary Hero',  req: 1000000, reward: 300000, desc: 'Kumpulkan total 1,000,000 Gold' }
+];
+
+const monsters = ['👹','👾','🐉','💀','🗿','👺'];
+
+/* ============================================================
+   AUTH SCREEN LOGIC
+   ============================================================ */
+const authTitle = document.getElementById('auth-title');
+const authUsernameInput = document.getElementById('auth-username');
+const authPasswordInput = document.getElementById('auth-password');
+const authSubmitBtn = document.getElementById('auth-submit-btn');
+const authToggleText = document.getElementById('auth-toggle-text');
+const authMsg = document.getElementById('auth-msg');
+const authOfflineBtn = document.getElementById('auth-offline-btn');
+
+function setAuthMsg(text, type) {
+  authMsg.textContent = text || '';
+  authMsg.className = 'form-msg' + (type ? ' ' + type : '');
+}
+
+function openAuth(mode) {
+  isRegisterMode = (mode === 'register');
+  authTitle.textContent = isRegisterMode ? 'Buat Hero Baru' : 'Login Hero';
+  authSubmitBtn.textContent = isRegisterMode ? 'Buat Hero' : 'Masuk Dungeon';
+  authToggleText.innerHTML = isRegisterMode
+    ? 'Sudah punya akun? <span>Login di sini</span>'
+    : 'Belum punya akun? <span>Bikin Hero Baru</span>';
+  setAuthMsg(firebaseReady ? '' : 'Menghubungkan ke cloud...', firebaseReady ? '' : 'warn');
+  showScreen('auth');
+  refreshFirebaseDependentUI();
+}
+
+// Dipanggil ulang setiap kali status Firebase berubah (misal baru selesai dimuat
+// di background), supaya layar auth yang sedang terbuka ikut ter-update.
+function refreshFirebaseDependentUI() {
+  authOfflineBtn.style.display = 'block'; // selalu tersedia sebagai fallback
+  if (document.getElementById('screen-auth').classList.contains('active')) {
+    if (!firebaseReady) {
+      setAuthMsg('Cloud database belum terkonfigurasi/gagal konek — kamu tetap bisa main offline.', 'warn');
+    } else if (authMsg.textContent === 'Menghubungkan ke cloud...') {
+      setAuthMsg('');
+    }
+  }
+}
+
+authToggleText.addEventListener('click', (e) => {
+  if (e.target.tagName === 'SPAN') openAuth(isRegisterMode ? 'login' : 'register');
+});
+
+authSubmitBtn.addEventListener('click', async () => {
+  const user = authUsernameInput.value.trim().toLowerCase();
+  const pass = authPasswordInput.value.trim();
+  if (!user || !pass) { setAuthMsg('Isi username dan password!', 'error'); return; }
+  if (!firebaseReady) { setAuthMsg('Cloud belum aktif. Gunakan tombol "Main Offline".', 'error'); return; }
+
+  authSubmitBtn.disabled = true;
+  authSubmitBtn.textContent = 'Memuat...';
+  try {
+    const { ref, get, set } = firebaseFns;
+    const userRef = ref(db, 'heroes/' + user);
+    const snapshot = await get(userRef);
+
+    if (isRegisterMode) {
+      if (snapshot.exists()) { setAuthMsg('Nama hero ini sudah terpakai!', 'error'); return; }
+      await set(userRef, { password: pass, totalGoldEarned: 0, gold: 0 });
+      setAuthMsg('Hero berhasil dibuat! Silakan login.', 'ok');
+      openAuth('login');
+      return;
+    } else {
+      if (!snapshot.exists() || snapshot.val().password !== pass) {
+        setAuthMsg('Username / password salah!', 'error'); return;
+      }
+      await login(user, true);
+    }
+  } catch (err) {
+    console.error(err);
+    setAuthMsg('Gagal konek ke cloud database. Cek konfigurasi/rules Firebase kamu, atau main offline.', 'error');
+  } finally {
+    authSubmitBtn.disabled = false;
+    authSubmitBtn.textContent = isRegisterMode ? 'Buat Hero' : 'Masuk Dungeon';
+  }
+});
+
+authOfflineBtn.addEventListener('click', () => {
+  const user = authUsernameInput.value.trim().toLowerCase() || 'guest';
+  login(user, false);
+});
+
+async function login(user, cloud) {
+  currentUser = user;
+  localStorage.setItem('dungeon_hero', JSON.stringify({ user, cloud }));
+  document.getElementById('user-display-name').textContent = `⚔️ ${user}${cloud ? '' : ' (offline)'}`;
+  showScreen('game');
+  toast(`Selamat datang, ${user}!`);
+
+  if (cloud && firebaseReady) {
+    await loadCloudData();
+    listenRealtimeLeaderboard();
+    document.getElementById('scoreboard-status').textContent = '⚡ Peringkat realtime dari cloud database';
+  } else {
+    loadLocalData();
+    document.getElementById('scoreboard-status').textContent = 'Mode offline — leaderboard tidak tersedia';
+    document.getElementById('scoreboard-list').innerHTML = '<div class="hint">Login dengan cloud untuk melihat leaderboard.</div>';
+  }
+  recalculate();
+  renderRewards();
+}
+
+function loadLocalData() {
+  try {
+    const raw = localStorage.getItem('dungeon_save_' + currentUser);
+    if (!raw) return;
+    const data = JSON.parse(raw);
+    applyLoadedData(data);
+  } catch (err) { console.warn('Gagal load save lokal', err); }
+}
+
+function saveLocalData() {
+  if (!currentUser) return;
+  localStorage.setItem('dungeon_save_' + currentUser, JSON.stringify({
+    gold: gameState.gold,
+    totalGoldEarned: gameState.totalGoldEarned,
+    lastDailyClaim: gameState.lastDailyClaim,
+    claimedQuests: gameState.claimedQuests,
+    upgrades: gameState.upgrades
+  }));
+}
+
+async function loadCloudData() {
+  try {
+    const { ref, get } = firebaseFns;
+    const userRef = ref(db, 'heroes/' + currentUser);
+    const snapshot = await get(userRef);
+    if (snapshot.exists()) applyLoadedData(snapshot.val());
+  } catch (err) {
+    console.warn('Gagal load cloud data', err);
+    toast('Gagal memuat data cloud, memakai data lokal jika ada.');
+    loadLocalData();
+  }
+}
+
+// Menggabungkan data tersimpan dengan definisi upgrade default,
+// supaya field seperti icon/name/dps/clickAdd SELALU lengkap
+// (mencegah icon senjata jadi "undefined" jika data lama tidak punya field tsb).
+function applyLoadedData(data) {
+  gameState.gold = data.gold || 0;
+  gameState.totalGoldEarned = data.totalGoldEarned || 0;
+  gameState.lastDailyClaim = data.lastDailyClaim || 0;
+  gameState.claimedQuests = data.claimedQuests || [];
+  if (Array.isArray(data.upgrades)) {
+    gameState.upgrades = gameState.upgrades.map(defaultUpg => {
+      const saved = data.upgrades.find(u => u.id === defaultUpg.id);
+      return saved ? { ...defaultUpg, count: saved.count || 0, cost: saved.cost || defaultUpg.baseCost } : defaultUpg;
+    });
+  }
+}
+
+function syncToCloud() {
+  saveLocalData();
+  if (!currentUser || !firebaseReady) return;
+  const saved = JSON.parse(localStorage.getItem('dungeon_hero') || '{}');
+  if (!saved.cloud) return;
+  try {
+    const { ref, set } = firebaseFns;
+    set(ref(db, 'heroes/' + currentUser + '/gold'), Math.floor(gameState.gold));
+    set(ref(db, 'heroes/' + currentUser + '/totalGoldEarned'), Math.floor(gameState.totalGoldEarned));
+    set(ref(db, 'heroes/' + currentUser + '/lastDailyClaim'), gameState.lastDailyClaim);
+    set(ref(db, 'heroes/' + currentUser + '/claimedQuests'), gameState.claimedQuests);
+    set(ref(db, 'heroes/' + currentUser + '/upgrades'), gameState.upgrades);
+  } catch (err) { console.warn('Sync ke cloud gagal', err); }
+}
+
+function listenRealtimeLeaderboard() {
+  if (!firebaseReady) return;
+  const { ref, onValue, off } = firebaseFns;
+  if (leaderboardUnsub) { off(ref(db, 'heroes')); leaderboardUnsub = null; }
+  const heroesRef = ref(db, 'heroes');
+  onValue(heroesRef, (snapshot) => {
+    const data = snapshot.val();
+    if (!data) return;
+    const board = Object.keys(data).map(u => ({ name: u, score: data[u].totalGoldEarned || 0 }));
+    board.sort((a, b) => b.score - a.score);
+    renderScoreboard(board);
+  }, (err) => console.warn('Leaderboard listener error', err));
+  leaderboardUnsub = true;
+}
+
+function renderScoreboard(board) {
+  const container = document.getElementById('scoreboard-list');
+  container.innerHTML = '';
+  board.slice(0, 10).forEach((item, index) => {
+    const isMe = item.name === currentUser;
+    const card = document.createElement('div');
+    card.className = 'item-card';
+    card.style.cursor = 'default';
+    if (isMe) card.style.borderColor = 'var(--gold)';
+    card.innerHTML = `
+      <div style="display:flex; gap:10px; align-items:center;">
+        <span style="font-family:var(--font-mono); color:var(--ember); font-weight:700;">#${index + 1}</span>
+        <span style="color:${isMe ? 'var(--gold)' : '#fff'}; font-weight:600;">${escapeHtml(item.name)} ${isMe ? '(You)' : ''}</span>
+      </div>
+      <div style="font-family:var(--font-mono); color:var(--gold); font-weight:700;">${Math.floor(item.score).toLocaleString()} 🪙</div>
+    `;
+    container.appendChild(card);
+  });
+}
+
+function escapeHtml(str) {
+  const div = document.createElement('div');
+  div.textContent = str;
+  return div.innerHTML;
+}
+
+/* ============================================================
+   OPTIONS SCREEN
+   ============================================================ */
+const optParticles = document.getElementById('opt-particles');
+const optAnimations = document.getElementById('opt-animations');
+
+function refreshOptionsScreen() {
+  const loggedIn = !!currentUser;
+  document.getElementById('opt-logout-row').style.display = loggedIn ? 'flex' : 'none';
+  document.getElementById('opt-reset-row').style.display = loggedIn ? 'flex' : 'none';
+  document.getElementById('opt-current-hero').textContent = loggedIn ? currentUser : '-';
+}
+
+optParticles.addEventListener('change', () => {
+  particlesEnabled = optParticles.checked;
+  document.getElementById('ember-canvas').style.display = particlesEnabled ? 'block' : 'none';
+});
+optAnimations.addEventListener('change', () => {
+  document.documentElement.style.setProperty('--anim-scale', optAnimations.checked ? '1' : '0');
+  document.body.classList.toggle('anim-off', !optAnimations.checked);
+});
+
+document.getElementById('opt-logout').addEventListener('click', () => {
+  localStorage.removeItem('dungeon_hero');
+  location.reload();
+});
+
+document.getElementById('opt-reset').addEventListener('click', () => {
+  if (!confirm('Yakin ingin reset semua progress hero ini? Aksi ini tidak bisa dibatalkan.')) return;
+  gameState.gold = 0;
+  gameState.totalGoldEarned = 0;
+  gameState.lastDailyClaim = 0;
+  gameState.claimedQuests = [];
+  gameState.upgrades.forEach(u => { u.count = 0; u.cost = u.baseCost; });
+  recalculate();
+  renderRewards();
+  syncToCloud();
+  toast('Progress berhasil direset.');
+});
+
+/* ============================================================
+   CLICKER / GAME LOOP
+   ============================================================ */
+const clickBtn = document.getElementById('click-btn');
+const monsterIcon = document.getElementById('monster-icon');
+const slashFx = document.getElementById('slash-fx');
+const hpBar = document.getElementById('hp-bar');
+const goldCountEl = document.getElementById('gold-count');
+const dpsCountEl = document.getElementById('dps-count');
+
+clickBtn.addEventListener('click', (e) => {
+  gameState.gold += gameState.clickPower;
+  gameState.totalGoldEarned += gameState.clickPower;
+
+  slashFx.classList.remove('active');
+  monsterIcon.classList.remove('hit');
+  void slashFx.offsetWidth;
+  slashFx.classList.add('active');
+  monsterIcon.classList.add('hit');
+
+  currentHpPercent -= 12;
+  if (currentHpPercent <= 0) {
+    currentHpPercent = 100;
+    monsterIcon.textContent = monsters[Math.floor(Math.random() * monsters.length)];
+  }
+  hpBar.style.width = `${currentHpPercent}%`;
+
+  const rect = clickBtn.getBoundingClientRect();
+  const floating = document.createElement('div');
+  floating.className = 'floating-dmg';
+  floating.textContent = `-${gameState.clickPower}`;
+  floating.style.left = `${e.clientX - rect.left + (Math.random() - 0.5) * 30}px`;
+  floating.style.top = `${e.clientY - rect.top}px`;
+  clickBtn.appendChild(floating);
+  setTimeout(() => floating.remove(), 700);
+
+  updateUI();
+});
+
+function recalculate() {
+  let dps = 0, clickAdd = 0;
+  gameState.upgrades.forEach(u => { dps += (u.dps * u.count); clickAdd += ((u.clickAdd || 0) * u.count); });
+  gameState.dps = dps;
+  gameState.clickPower = 1 + clickAdd;
+  renderUpgrades();
+  updateUI();
+}
+
+function renderUpgrades() {
+  const container = document.getElementById('upgrades-list');
+  container.innerHTML = '';
+  gameState.upgrades.forEach(u => {
+    const card = document.createElement('div');
+    card.className = 'item-card';
+    card.onclick = () => {
+      if (gameState.gold >= u.cost) {
+        gameState.gold -= u.cost;
+        u.count++;
+        u.cost = Math.floor(u.baseCost * Math.pow(1.15, u.count));
+        recalculate();
+        syncToCloud();
+      } else {
+        toast('Gold tidak cukup!');
+      }
+    };
+    card.innerHTML = `
+      <div class="icon-frame">${u.icon}</div>
+      <div style="flex:1;">
+        <div class="item-name">${u.name} <span style="color:var(--ember)">(${u.count})</span></div>
+        <div class="item-sub">+${u.dps} DPS / +${u.clickAdd || 0} Click</div>
+      </div>
+      <div class="item-price">${u.cost.toLocaleString()} 🪙</div>
+    `;
+    container.appendChild(card);
+  });
+}
+
+function renderRewards() {
+  const dailyBtn = document.getElementById('claim-daily-btn');
+  const now = Date.now();
+  if (now - gameState.lastDailyClaim < 86400000) {
+    dailyBtn.textContent = 'CLAIMED';
+    dailyBtn.classList.add('claimed');
+    dailyBtn.onclick = null;
+  } else {
+    dailyBtn.textContent = 'CLAIM';
+    dailyBtn.classList.remove('claimed');
+    dailyBtn.onclick = () => {
+      gameState.gold += 1000;
+      gameState.totalGoldEarned += 1000;
+      gameState.lastDailyClaim = Date.now();
+      toast('Claimed +1,000 Gold Daily Reward!');
+      renderRewards();
+      updateUI();
+      syncToCloud();
+    };
+  }
+
+  document.querySelectorAll('.quest-card').forEach(e => e.remove());
+  const list = document.getElementById('rewards-list');
+  questList.forEach(q => {
+    const isClaimed = gameState.claimedQuests.includes(q.id);
+    const canClaim = gameState.totalGoldEarned >= q.req && !isClaimed;
+    const card = document.createElement('div');
+    card.className = 'item-card quest-card';
+    card.style.cursor = 'default';
+    card.innerHTML = `
+      <div class="icon-frame" style="border-color:var(--blood)">🏆</div>
+      <div style="flex:1;">
+        <div class="item-name">${q.title}</div>
+        <div class="item-sub">${q.desc}</div>
+      </div>
+      <button class="btn-claim ${isClaimed ? 'claimed' : ''}" id="${q.id}">${isClaimed ? 'CLAIMED' : 'PRIZE: +' + q.reward}</button>
+    `;
+    list.appendChild(card);
+    if (canClaim) {
+      card.querySelector(`#${q.id}`).onclick = () => {
+        gameState.gold += q.reward;
+        gameState.claimedQuests.push(q.id);
+        toast(`Quest selesai! Hadiah: +${q.reward} Gold`);
+        renderRewards();
+        updateUI();
+        syncToCloud();
+      };
+    }
+  });
+}
+
+function updateUI() {
+  goldCountEl.textContent = `${Math.floor(gameState.gold).toLocaleString()} 🪙`;
+  dpsCountEl.textContent = gameState.dps.toLocaleString();
+}
+
+/* Tabs */
+document.querySelectorAll('.tab-btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    const tab = btn.dataset.tab;
+    document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+    document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+    btn.classList.add('active');
+    document.getElementById('tab-' + tab).classList.add('active');
+    if (tab === 'rewards') renderRewards();
+  });
+});
+
+document.getElementById('logout-btn').addEventListener('click', () => {
+  localStorage.removeItem('dungeon_hero');
+  location.reload();
+});
+
+/* Game loop */
+setInterval(() => {
+  if (currentUser && gameState.dps > 0) {
+    gameState.gold += gameState.dps / 10;
+    gameState.totalGoldEarned += gameState.dps / 10;
+    updateUI();
+  }
+}, 100);
+setInterval(() => { if (currentUser) syncToCloud(); }, 3000);
+
+/* Auto-login dari sesi sebelumnya.
+   Ditunda sedikit (bukan diblokir) supaya initFirebase() di atas sempat selesai
+   duluan kalau memang cepat, tapi tetap jalan walau Firebase belum/gagal siap. */
+try {
+  const savedRaw = localStorage.getItem('dungeon_hero');
+  if (savedRaw) {
+    const saved = JSON.parse(savedRaw);
+    if (saved && saved.user) {
+      setTimeout(() => login(saved.user, !!saved.cloud && firebaseReady), 300);
+    }
+  }
+} catch (err) { console.warn('Auto-login gagal', err); }
+
+/* ============================================================
+   AMBIENT EMBER PARTICLES (canvas, ringan, dimatikan lewat opsi)
+   ============================================================ */
+let particlesEnabled = true;
+const canvas = document.getElementById('ember-canvas');
+const ctx = canvas.getContext('2d');
+let particles = [];
+
+function resizeCanvas() { canvas.width = window.innerWidth; canvas.height = window.innerHeight; }
+resizeCanvas();
+window.addEventListener('resize', resizeCanvas);
+
+function spawnParticle() {
+  return {
+    x: Math.random() * canvas.width,
+    y: canvas.height + 10,
+    r: 1 + Math.random() * 2.2,
+    speed: 0.3 + Math.random() * 0.9,
+    sway: Math.random() * 1.4,
+    swaySeed: Math.random() * Math.PI * 2,
+    life: 0,
+    maxLife: 400 + Math.random() * 400,
+    hue: Math.random() > 0.5 ? '255,138,61' : '232,196,104'
+  };
+}
+for (let i = 0; i < 46; i++) { const p = spawnParticle(); p.y = Math.random() * canvas.height; particles.push(p); }
+
+function animateParticles() {
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  if (particlesEnabled) {
+    particles.forEach((p, i) => {
+      p.life++;
+      p.y -= p.speed;
+      p.x += Math.sin(p.life * 0.02 + p.swaySeed) * p.sway * 0.15;
+      const fade = Math.max(0, 1 - p.life / p.maxLife);
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2);
+      ctx.fillStyle = `rgba(${p.hue},${0.55 * fade})`;
+      ctx.shadowBlur = 8;
+      ctx.shadowColor = `rgba(${p.hue},0.8)`;
+      ctx.fill();
+      if (p.y < -10 || p.life > p.maxLife) particles[i] = spawnParticle();
+    });
+  }
+  requestAnimationFrame(animateParticles);
+}
+animateParticles();
+</script>
+</body>
+</html>
+    overflow:hidden;
+    transition:transform .18s ease, border-color .18s ease, box-shadow .18s ease;
+  }
+  .menu-btn::before{
+    content:''; position:absolute; left:0; top:0; bottom:0; width:3px;
+    background:var(--ember); box-shadow:0 0 10px var(--ember);
+    transform:scaleY(0); transform-origin:center; transition:transform .18s ease;
+  }
+  .menu-btn:hover{ transform:translateX(4px); border-color:var(--ember-dim); box-shadow:0 6px 20px rgba(255,138,61,.12); }
+  .menu-btn:hover::before{ transform:scaleY(1); }
+  .menu-btn .tag{ float:right; font-family:var(--font-mono); font-size:.65rem; color:var(--ink-dim); letter-spacing:.1em; }
+  .menu-btn.primary{ border-color:var(--ember-dim); background:linear-gradient(180deg, rgba(255,138,61,.16), rgba(20,14,30,.8)); }
+
+  .foot-credit{ position:fixed; bottom:14px; z-index:2; font-family:var(--font-mono); font-size:.62rem; color:var(--ink-dim); letter-spacing:.15em; opacity:.7;}
+
+  /* ---------- Panel (shared card look for auth/options/credits) ---------- */
+  .panel{
+    background:var(--panel);
+    border:1px solid var(--panel-edge);
+    border-radius:16px;
+    box-shadow:0 20px 60px rgba(0,0,0,.6), 0 0 0 1px rgba(255,138,61,.05);
+    padding:30px;
+    width:min(400px,92vw);
+    backdrop-filter:blur(10px);
+  }
+  .panel h2{
+    font-family:var(--font-display); color:var(--gold); font-size:1.4rem;
+    letter-spacing:.05em; margin-bottom:18px; text-align:center;
+  }
+  .panel-wide{ width:min(560px,92vw); max-height:82vh; overflow-y:auto; }
+
+  .field{ margin-bottom:14px; text-align:left; }
+  .field label{ display:block; font-family:var(--font-mono); font-size:.65rem; letter-spacing:.12em; color:var(--ink-dim); margin-bottom:6px; text-transform:uppercase;}
+  .field input{
+    width:100%; background:rgba(5,3,10,.7); border:1px solid var(--line); border-radius:8px;
+    padding:11px 13px; color:#fff; font-family:var(--font-body); font-size:.95rem; outline:none;
+    transition:border-color .15s ease, box-shadow .15s ease;
+  }
+  .field input:focus{ border-color:var(--ember); box-shadow:0 0 0 3px rgba(255,138,61,.12); }
+
+  .btn-primary{
+    width:100%; background:linear-gradient(135deg, var(--ember), var(--blood));
+    color:#fff; border:none; padding:13px; font-family:var(--font-display); font-weight:700;
+    font-size:.95rem; letter-spacing:.05em; border-radius:8px; cursor:pointer; margin-top:6px;
+    box-shadow:0 6px 20px rgba(255,90,45,.3); transition:transform .12s ease, box-shadow .12s ease;
+  }
+  .btn-primary:hover{ transform:translateY(-1px); box-shadow:0 8px 26px rgba(255,90,45,.42);}
+  .btn-primary:disabled{ opacity:.55; cursor:not-allowed; transform:none; }
+  .btn-primary.ghost{ background:transparent; border:1px solid var(--line); box-shadow:none; color:var(--ink-dim); }
+  .btn-primary.danger{ background:linear-gradient(135deg,#7a1230,#3d0916); }
+
+  .link-toggle{ margin-top:14px; font-size:.8rem; color:var(--ink-dim); text-align:center; font-family:var(--font-mono); }
+  .link-toggle span{ color:var(--gold); cursor:pointer; text-decoration:underline; }
+
+  .form-msg{ font-family:var(--font-mono); font-size:.72rem; text-align:center; min-height:18px; margin-top:10px; }
+  .form-msg.error{ color:var(--blood); }
+  .form-msg.warn{ color:var(--ember); }
+  .form-msg.ok{ color:var(--rune); }
+
+  .back-row{ display:flex; justify-content:space-between; align-items:center; margin-bottom:16px; }
+  .icon-back{ background:none; border:1px solid var(--line); color:var(--ink-dim); border-radius:8px; padding:7px 12px; cursor:pointer; font-family:var(--font-mono); font-size:.72rem; }
+  .icon-back:hover{ border-color:var(--ember-dim); color:var(--ink); }
+
+  /* Options rows */
+  .opt-row{ display:flex; justify-content:space-between; align-items:center; padding:12px 0; border-bottom:1px solid rgba(255,255,255,.05); }
+  .opt-row:last-child{ border-bottom:none; }
+  .opt-label{ font-size:.9rem; }
+  .opt-label small{ display:block; font-family:var(--font-mono); font-size:.65rem; color:var(--ink-dim); margin-top:2px;}
+  .switch{ position:relative; width:44px; height:24px; }
+  .switch input{ opacity:0; width:0; height:0; }
+  .slider-pill{ position:absolute; inset:0; background:rgba(255,255,255,.08); border:1px solid var(--line); border-radius:20px; cursor:pointer; transition:.2s; }
+  .slider-pill::before{ content:''; position:absolute; width:16px; height:16px; left:3px; top:3px; background:var(--ink-dim); border-radius:50%; transition:.2s; }
+  .switch input:checked + .slider-pill{ background:rgba(255,138,61,.25); border-color:var(--ember-dim); }
+  .switch input:checked + .slider-pill::before{ transform:translateX(20px); background:var(--ember); }
+
+  /* Credits */
+  .credit-block{ margin-bottom:18px; }
+  .credit-block h3{ font-family:var(--font-display); font-size:.85rem; color:var(--ember); letter-spacing:.1em; margin-bottom:6px; text-transform:uppercase; }
+  .credit-block p, .credit-block li{ font-size:.85rem; color:var(--ink-dim); line-height:1.6; }
+  .credit-block ul{ padding-left:18px; }
+
+  /* ---------- GAME SCREEN ---------- */
+  #screen-game{ padding:16px; }
+  .game-shell{ width:min(1100px,100%); height:100%; display:flex; flex-direction:column; }
+  .hud{
+    display:flex; justify-content:space-between; align-items:center;
+    padding:10px 18px; background:rgba(10,7,16,.7); border:1px solid var(--panel-edge);
+    border-radius:14px; margin-bottom:14px; backdrop-filter:blur(8px);
+  }
+  .hud h1{ font-family:var(--font-display); font-size:1.15rem; color:var(--gold); letter-spacing:.06em; }
+  .hud-right{ display:flex; align-items:center; gap:10px; }
+  .badge{ font-family:var(--font-mono); font-size:.72rem; color:var(--gold); background:rgba(232,196,104,.08); padding:6px 12px; border-radius:20px; border:1px solid rgba(232,196,104,.35); }
+  .icon-btn{ background:transparent; border:1px solid var(--line); color:var(--ink-dim); padding:6px 11px; border-radius:8px; cursor:pointer; font-family:var(--font-mono); font-size:.7rem; }
+  .icon-btn:hover{ color:var(--ink); border-color:var(--ember-dim); }
+
+  .game-grid{ display:grid; grid-template-columns:1.05fr 1fr; gap:16px; flex:1; min-height:0; }
+  @media (max-width:850px){ .game-grid{ grid-template-columns:1fr; } }
+
+  .card{
+    background:var(--panel); border:1px solid var(--panel-edge); border-radius:16px;
+    padding:22px; box-shadow:0 10px 34px rgba(0,0,0,.55); backdrop-filter:blur(8px);
+    display:flex; flex-direction:column; min-height:0;
+  }
+
+  .clicker{ align-items:center; justify-content:center; text-align:center; position:relative; }
+  .gold-label{ font-family:var(--font-mono); font-size:.7rem; letter-spacing:.15em; color:var(--ink-dim); text-transform:uppercase; }
+  .gold-count{ font-family:var(--font-display); font-size:clamp(1.8rem,4vw,2.6rem); font-weight:900; color:var(--gold); text-shadow:0 0 16px rgba(232,196,104,.4); }
+  .dps-line{ color:var(--blood); font-size:.85rem; font-weight:600; font-family:var(--font-mono); }
+
+  .hp-wrap{ width:80%; height:11px; background:rgba(0,0,0,.6); border:1px solid var(--line); border-radius:10px; overflow:hidden; margin:12px 0; }
+  .hp-fill{ width:100%; height:100%; background:linear-gradient(90deg, var(--blood), var(--ember)); transition:width .12s ease; }
+
+  .monster-stage{ position:relative; width:210px; height:210px; margin:12px 0; display:flex; align-items:center; justify-content:center; cursor:pointer; }
+  .monster-glow{ position:absolute; inset:10px; border-radius:50%; background:radial-gradient(circle, rgba(255,138,61,.18), transparent 70%); filter:blur(6px); animation:pulseGlow 2.4s ease-in-out infinite; }
+  @keyframes pulseGlow{ 0%,100%{ opacity:.5; } 50%{ opacity:1; } }
+  .monster-avatar{ font-size:104px; filter:drop-shadow(0 10px 22px rgba(0,0,0,.8)); transition:transform .05s ease; position:relative; z-index:2; }
+  .monster-avatar.hit{ animation:hitShake .16s ease-in-out; }
+  @keyframes hitShake{
+    0%{ transform:scale(.88) rotate(-9deg); filter:brightness(2.1) drop-shadow(0 0 16px red); }
+    50%{ transform:scale(.9) rotate(9deg); }
+    100%{ transform:scale(1) rotate(0); }
+  }
+  .slash-fx{
+    position:absolute; width:170px; height:7px;
+    background:linear-gradient(90deg, transparent, #fff, var(--blood), transparent);
+    box-shadow:0 0 14px var(--blood), 0 0 24px #fff; border-radius:50%;
+    pointer-events:none; opacity:0; transform:rotate(-35deg) scaleX(0); z-index:10;
+  }
+  .slash-fx.active{ animation:slashAnim .22s ease-out forwards; }
+  @keyframes slashAnim{
+    0%{ opacity:1; transform:rotate(-35deg) scaleX(.2) translateY(-18px); }
+    50%{ opacity:1; transform:rotate(-35deg) scaleX(1.3) translateY(0); }
+    100%{ opacity:0; transform:rotate(-35deg) scaleX(1.5) translateY(18px); }
+  }
+  .floating-dmg{
+    position:absolute; font-family:var(--font-mono); font-weight:700; font-size:1.5rem; color:var(--blood);
+    text-shadow:0 0 8px #000, 0 0 6px var(--ember); pointer-events:none;
+    animation:floatUp .7s ease-out forwards; z-index:20;
+  }
+  @keyframes floatUp{ 0%{ opacity:1; transform:translateY(0) scale(1); } 100%{ opacity:0; transform:translateY(-64px) scale(1.25); } }
+  .hint{ font-size:.78rem; color:var(--ink-dim); font-family:var(--font-mono); letter-spacing:.05em; }
+
+  .tabs{ display:flex; gap:6px; margin-bottom:14px; border-bottom:1px solid var(--panel-edge); padding-bottom:10px; flex-shrink:0; }
+  .tab-btn{ background:transparent; border:none; color:var(--ink-dim); font-family:var(--font-display); font-size:.82rem; letter-spacing:.03em; cursor:pointer; padding:7px 12px; border-radius:6px; }
+  .tab-btn.active{ color:#fff; background:rgba(255,138,61,.15); }
+  .pulse-live{ width:7px; height:7px; background:var(--rune); border-radius:50%; display:inline-block; box-shadow:0 0 8px var(--rune); animation:blink 1s infinite alternate; margin-right:4px;}
+  @keyframes blink{ from{ opacity:.3;} to{ opacity:1;} }
+
+  .tab-content{ display:none; flex:1; min-height:0; }
+  .tab-content.active{ display:flex; flex-direction:column; }
+  .list-container{ display:flex; flex-direction:column; gap:9px; overflow-y:auto; padding-right:4px; }
+
+  .item-card{
+    background:rgba(10,7,16,.75); border:1px solid var(--panel-edge); border-radius:12px;
+    padding:11px 14px; display:flex; align-items:center; justify-content:space-between; gap:12px;
+    transition:all .18s ease; cursor:pointer;
+  }
+  .item-card:hover{ border-color:var(--ember-dim); background:rgba(255,138,61,.06); }
+  .item-card.locked{ cursor:not-allowed; opacity:.55; }
+  .icon-frame{ width:44px; height:44px; background:radial-gradient(circle, rgba(82,63,115,.6), rgba(15,10,25,.9)); border:2px solid var(--line); border-radius:10px; display:flex; align-items:center; justify-content:center; font-size:22px; flex-shrink:0; }
+  .item-name{ color:#fff; font-weight:600; font-family:var(--font-display); font-size:.88rem; }
+  .item-sub{ font-size:.72rem; color:var(--ink-dim); font-family:var(--font-mono); margin-top:1px; }
+  .item-price{ font-family:var(--font-mono); color:var(--gold); font-weight:700; font-size:.85rem; white-space:nowrap; }
+
+  .btn-claim{ background:linear-gradient(135deg,#1f9e57,#0e6d3a); color:#fff; border:none; padding:7px 14px; font-family:var(--font-display); font-size:.75rem; font-weight:700; border-radius:6px; cursor:pointer; white-space:nowrap; }
+  .btn-claim.claimed{ background:var(--line); color:var(--ink-dim); cursor:not-allowed; }
+
+  ::-webkit-scrollbar{ width:6px; }
+  ::-webkit-scrollbar-thumb{ background:var(--line); border-radius:4px; }
+
+  .toast-stack{ position:fixed; top:16px; left:50%; transform:translateX(-50%); z-index:200; display:flex; flex-direction:column; gap:8px; align-items:center; }
+  .toast{
+    font-family:var(--font-mono); font-size:.78rem; color:var(--ink); background:rgba(15,10,22,.95);
+    border:1px solid var(--ember-dim); padding:9px 16px; border-radius:8px; box-shadow:0 8px 24px rgba(0,0,0,.5);
+    animation:toastIn .25s ease, toastOut .3s ease 2.4s forwards;
+  }
+  @keyframes toastIn{ from{opacity:0; transform:translateY(-10px);} to{opacity:1; transform:translateY(0);} }
+  @keyframes toastOut{ to{opacity:0; transform:translateY(-8px);} }
+</style>
+</head>
+<body>
+
+<canvas id="ember-canvas"></canvas>
+<div class="bg-image"></div>
+<div class="vignette"></div>
+<div class="toast-stack" id="toast-stack"></div>
+
+<!-- ================= START SCREEN ================= -->
+<section class="screen active" id="screen-start">
+  <div class="sigil-wrap">
+    <div class="sigil-ring"></div>
+    <div>
+      <div class="logo-title">⚔️ DUNGEON<br>SLAYER</div>
+      <div class="logo-sub">Realtime Guild Clicker</div>
+    </div>
+  </div>
+  <div class="menu-stack">
+    <button class="menu-btn primary" id="nav-start">Mulai <span class="tag">Start</span></button>
+    <button class="menu-btn" id="nav-options">Opsi <span class="tag">Options</span></button>
+    <button class="menu-btn" id="nav-credits">Kredit <span class="tag">Credits</span></button>
+  </div>
+  <div class="foot-credit">v1.0 — Powered by Firebase</div>
+</section>
+
+<!-- ================= AUTH SCREEN ================= -->
+<section class="screen" id="screen-auth">
+  <div class="panel">
+    <h2 id="auth-title">Login Hero</h2>
+    <div class="field">
+      <label>Nickname Hero</label>
+      <input type="text" id="auth-username" placeholder="Nama hero kamu..." maxlength="15">
+    </div>
+    <div class="field">
+      <label>Password</label>
+      <input type="password" id="auth-password" placeholder="Password rahasia...">
+    </div>
+    <button class="btn-primary" id="auth-submit-btn">Masuk Dungeon</button>
+    <button class="btn-primary ghost" id="auth-offline-btn">Main Offline (Tanpa Cloud)</button>
+    <div class="form-msg" id="auth-msg"></div>
+    <div class="link-toggle" id="auth-toggle-text">Belum punya akun? <span>Bikin Hero Baru</span></div>
+    <div class="link-toggle"><span id="auth-back">← Kembali ke Menu</span></div>
+  </div>
+</section>
+
+<!-- ================= OPTIONS SCREEN ================= -->
+<section class="screen" id="screen-options">
+  <div class="panel">
+    <div class="back-row">
+      <button class="icon-back" id="opt-back">← Kembali</button>
+      <h2 style="margin:0;">Opsi</h2>
+      <span style="width:66px;"></span>
+    </div>
+    <div class="opt-row">
+      <div class="opt-label">Efek Partikel Ember<small>Nonaktifkan jika perangkat lag</small></div>
+      <label class="switch"><input type="checkbox" id="opt-particles" checked><span class="slider-pill"></span></label>
+    </div>
+    <div class="opt-row">
+      <div class="opt-label">Animasi Layar<small>Transisi & efek tebasan</small></div>
+      <label class="switch"><input type="checkbox" id="opt-animations" checked><span class="slider-pill"></span></label>
+    </div>
+    <div class="opt-row" id="opt-logout-row" style="display:none;">
+      <div class="opt-label">Sesi Aktif<small id="opt-current-hero">-</small></div>
+      <button class="btn-primary ghost" style="width:auto; padding:8px 16px; margin:0;" id="opt-logout">Logout</button>
+    </div>
+    <div class="opt-row" id="opt-reset-row" style="display:none;">
+      <div class="opt-label">Reset Progress<small>Menghapus semua progress hero ini</small></div>
+      <button class="btn-primary danger" style="width:auto; padding:8px 16px; margin:0;" id="opt-reset">Reset</button>
+    </div>
+  </div>
+</section>
+
+<!-- ================= CREDITS SCREEN ================= -->
+<section class="screen" id="screen-credits">
+  <div class="panel panel-wide">
+    <div class="back-row">
+      <button class="icon-back" id="cred-back">← Kembali</button>
+      <h2 style="margin:0;">Kredit</h2>
+      <span style="width:66px;"></span>
+    </div>
+    <div class="credit-block">
+      <h3>Game Design & Development</h3>
+      <p>Dungeon Slayer — dibuat dan dikembangkan secara mandiri oleh pemilik proyek ini.</p>
+    </div>
+    <div class="credit-block">
+      <h3>Teknologi</h3>
+      <ul>
+        <li>Frontend — HTML, CSS, dan vanilla JavaScript (tanpa build step)</li>
+        <li>Cloud Save & Leaderboard — Firebase Realtime Database</li>
+        <li>Hosting — Vercel</li>
+      </ul>
+    </div>
+    <div class="credit-block">
+      <h3>Aset & Tipografi</h3>
+      <ul>
+        <li>Font — Cinzel, Spectral, JetBrains Mono (Google Fonts)</li>
+        <li>Gambar latar — Unsplash</li>
+        <li>Ikon monster & senjata — Emoji standar Unicode</li>
+      </ul>
+    </div>
+    <div class="credit-block">
+      <h3>Terima Kasih</h3>
+      <p>Kepada seluruh hero yang bertarung di leaderboard, dan siapapun yang membaca sampai baris ini.</p>
+    </div>
+  </div>
+</section>
+
+<!-- ================= GAME SCREEN ================= -->
+<section class="screen" id="screen-game">
+  <div class="game-shell">
+    <div class="hud">
+      <h1>⚔️ DUNGEON SLAYER</h1>
+      <div class="hud-right">
+        <span class="badge" id="user-display-name">Guest Hero</span>
+        <button class="icon-btn" id="hud-options-btn">Opsi</button>
+        <button class="icon-btn" id="logout-btn">Logout</button>
+      </div>
+    </div>
+
+    <div class="game-grid">
+      <!-- Clicker -->
+      <div class="card clicker">
+        <div class="gold-label">Total Gold Earned</div>
+        <div class="gold-count" id="gold-count">0 🪙</div>
+        <div class="dps-line"><span id="dps-count">0</span> DPS (Auto Damage)</div>
+        <div class="hp-wrap"><div class="hp-fill" id="hp-bar"></div></div>
+        <div class="monster-stage" id="click-btn">
+          <div class="monster-glow"></div>
+          <div class="slash-fx" id="slash-fx"></div>
+          <div class="monster-avatar" id="monster-icon">👹</div>
+        </div>
+        <div class="hint">Tap monster untuk menebas & hancurkan!</div>
+      </div>
+
+      <!-- Tabs -->
+      <div class="card">
+        <div class="tabs">
+          <button class="tab-btn active" data-tab="upgrades">⚔️ Arsenal</button>
+          <button class="tab-btn" data-tab="rewards">🎁 Quests</button>
+          <button class="tab-btn" data-tab="scoreboard"><span class="pulse-live"></span>Top Heroes</button>
+        </div>
+        <div class="tab-content active" id="tab-upgrades">
+          <div class="list-container" id="upgrades-list"></div>
+        </div>
+        <div class="tab-content" id="tab-rewards">
+          <div class="list-container" id="rewards-list">
+            <div class="item-card" style="border-color:var(--gold); cursor:default;">
+              <div class="icon-frame" style="border-color:var(--gold);">👑</div>
+              <div style="flex:1;">
+                <div class="item-name">Daily Hero Chest</div>
+                <div class="item-sub">+1,000 Gold gratis setiap hari</div>
+              </div>
+              <button class="btn-claim" id="claim-daily-btn">CLAIM</button>
+            </div>
+          </div>
+        </div>
+        <div class="tab-content" id="tab-scoreboard">
+          <div class="hint" style="margin-bottom:8px;" id="scoreboard-status">⚡ Peringkat realtime dari cloud database</div>
+          <div class="list-container" id="scoreboard-list"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<script type="module">
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-app.js";
 import { getDatabase, ref, set, get, onValue, off } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-database.js";
 
