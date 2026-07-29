@@ -23,7 +23,6 @@
         body {
             font-family: 'Poppins', sans-serif;
             background-color: var(--bg-color);
-            /* Realistic Atmospheric Dungeon Background */
             background-image: 
                 linear-gradient(to bottom, rgba(8, 6, 12, 0.75), rgba(8, 6, 12, 0.92)),
                 url('https://images.unsplash.com/photo-1518709268805-4e9042af9f23?q=80&w=1600&auto=format&fit=crop');
@@ -147,7 +146,6 @@
             flex-direction: column;
         }
 
-        /* MONSTER & SLASH ANIMATION AREA */
         .clicker-section { 
             display: flex; 
             flex-direction: column; 
@@ -194,7 +192,6 @@
             transition: transform 0.05s ease;
         }
 
-        /* Animasi Kena Tebas (Hit Shake) */
         .monster-avatar.hit {
             animation: hitShake 0.15s ease-in-out;
         }
@@ -229,7 +226,6 @@
             100% { opacity: 0; transform: rotate(-35deg) scaleX(1.5) translateY(20px); }
         }
 
-        /* Floating Damage */
         .floating-dmg {
             position: absolute;
             font-family: 'Cinzel', serif;
@@ -257,7 +253,6 @@
 
         .list-container { display: flex; flex-direction: column; gap: 10px; overflow-y: auto; max-height: 380px; }
 
-        /* ITEM CARD & VISUAL WEAPONS OBJECTS */
         .item-card {
             background: rgba(12, 9, 21, 0.8);
             border: 1px solid var(--border-color);
@@ -272,7 +267,6 @@
             background: rgba(255, 157, 0, 0.08);
         }
 
-        /* Weapon Visual Frame Object */
         .weapon-icon-frame {
             width: 48px;
             height: 48px;
@@ -308,7 +302,6 @@
 </head>
 <body>
 
-    <!-- AUTHENTICATION MODAL -->
     <div class="modal-overlay" id="auth-modal">
         <div class="auth-card">
             <h2 id="auth-title">HERO LOGIN</h2>
@@ -327,7 +320,6 @@
         </div>
     </div>
 
-    <!-- MAIN HEADER -->
     <header>
         <h1>⚔️ DUNGEON SLAYER</h1>
         <div style="display:flex; align-items:center; gap:12px;">
@@ -337,27 +329,23 @@
     </header>
 
     <div class="container">
-        <!-- Attack Monster Area -->
         <div class="panel clicker-section">
             <div style="font-size: 0.85rem; color: var(--text-dim);">TOTAL GOLD EARNED</div>
             <div class="gold-count" id="gold-count">0 🪙</div>
             <div style="color:var(--accent-glow); font-size: 1rem; font-weight:600;"><span id="dps-count">0</span> DPS (Auto Damage)</div>
 
-            <!-- HP Bar -->
             <div class="hp-bar-container">
                 <div class="hp-bar-fill" id="hp-bar"></div>
             </div>
 
-            <!-- Monster Stage with Slash Effect -->
             <div class="monster-stage" id="click-btn">
                 <div class="slash-fx" id="slash-fx"></div>
-                <div class="monster-avatar" id="monster-icon">👹</div>
+                <div class="monster-avatar" id="monster-icon">🗿</div>
             </div>
 
             <div style="font-size:0.85rem; color:var(--text-dim); font-family:'Cinzel';">Tap Monster to Slash & Destroy!</div>
         </div>
 
-        <!-- Right Side Tabs -->
         <div class="panel">
             <div class="tabs">
                 <button class="tab-btn active" onclick="switchTab('upgrades')">⚔️ Arsenal Weapons</button>
@@ -365,12 +353,10 @@
                 <button class="tab-btn" onclick="switchTab('scoreboard')"><span class="pulse-live"></span> Top Heroes</button>
             </div>
 
-            <!-- Tab 1: Weapons & Upgrades -->
             <div class="tab-content active" id="tab-upgrades">
                 <div class="list-container" id="upgrades-list"></div>
             </div>
 
-            <!-- Tab 2: Quests & Prizes -->
             <div class="tab-content" id="tab-rewards">
                 <div class="list-container" id="rewards-list">
                     <div class="item-card" style="border-color: var(--gold);">
@@ -384,7 +370,6 @@
                 </div>
             </div>
 
-            <!-- Tab 3: Realtime Scoreboard -->
             <div class="tab-content" id="tab-scoreboard">
                 <div style="font-size: 0.8rem; color: var(--text-dim); margin-bottom: 8px;">
                     ⚡ Peringkat terupdate secara **Real-time** dari Cloud Database
@@ -394,22 +379,29 @@
         </div>
     </div>
 
-    <!-- Firebase SDKs -->
     <script type="module">
         import { initializeApp } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-app.js";
         import { getDatabase, ref, set, get, onValue } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-database.js";
 
-        // Setup Database Firebase (Line 237)
+        // Firebase Configuration
         const firebaseConfig = {
-            databaseURL: "https://mamang-e83d7-default-rtdb.asia-southeast1.firebasedatabase.app"
+            databaseURL: "https://mamang-e83d7-default-rtdb.asia-southeast1.firebasedatabase.app/
+"
         };
         const app = initializeApp(firebaseConfig);
         const db = getDatabase(app);
 
-        // State Management
         let currentUser = null;
         let isRegisterMode = false;
         let currentHpPercent = 100;
+
+        const defaultIcons = { 
+            dagger: '🗡️', 
+            ironSword: '⚔️', 
+            bow: '🏹', 
+            fireStaff: '🪄', 
+            excalibur: '🔱' 
+        };
 
         let gameState = {
             gold: 0,
@@ -433,7 +425,6 @@
             { id: 'q_1m', title: 'Legendary Hero', req: 1000000, reward: 300000, desc: 'Kumpulkan total 1,000,000 Gold' }
         ];
 
-        // UI DOM Elements
         const authModal = document.getElementById('auth-modal');
         const authTitle = document.getElementById('auth-title');
         const authUsernameInput = document.getElementById('auth-username');
@@ -448,10 +439,8 @@
         const goldCountEl = document.getElementById('gold-count');
         const dpsCountEl = document.getElementById('dps-count');
 
-        // Daftar Rupa Monster
         const monsters = ['👹', '👾', '🐉', '💀', '🗿', '👺'];
 
-        // Auth Logic
         authToggleText.addEventListener('click', () => {
             isRegisterMode = !isRegisterMode;
             authTitle.textContent = isRegisterMode ? "NEW HERO REGISTER" : "HERO LOGIN";
@@ -500,7 +489,14 @@
                 gameState.totalGoldEarned = data.totalGoldEarned || 0;
                 gameState.lastDailyClaim = data.lastDailyClaim || 0;
                 gameState.claimedQuests = data.claimedQuests || [];
-                if (data.upgrades) gameState.upgrades = data.upgrades;
+
+                // AUTO-FIX PATCH: Tambahkan icon ke data lama jika belum ada
+                if (data.upgrades) {
+                    gameState.upgrades = data.upgrades.map(u => ({
+                        ...u,
+                        icon: u.icon || defaultIcons[u.id] || '⚔️'
+                    }));
+                }
                 recalculate();
             }
         }
@@ -550,29 +546,24 @@
             });
         }
 
-        // SLASH & ATTACK ENGINE
         clickBtn.addEventListener('click', (e) => {
             gameState.gold += gameState.clickPower;
             gameState.totalGoldEarned += gameState.clickPower;
 
-            // Trigger Slash FX & Hit Shake Animation
             slashFx.classList.remove('active');
             monsterIcon.classList.remove('hit');
-            void slashFx.offsetWidth; // Force Reflow animation
+            void slashFx.offsetWidth;
             slashFx.classList.add('active');
             monsterIcon.classList.add('hit');
 
-            // Reduce HP Bar Visual
             currentHpPercent -= 12;
             if (currentHpPercent <= 0) {
                 currentHpPercent = 100;
-                // Ganti Monster Acak
                 const randomMonster = monsters[Math.floor(Math.random() * monsters.length)];
                 monsterIcon.textContent = randomMonster;
             }
             hpBar.style.width = `${currentHpPercent}%`;
 
-            // Floating Damage Pop-up
             const rect = clickBtn.getBoundingClientRect();
             const floating = document.createElement('div');
             floating.className = 'floating-dmg';
@@ -614,7 +605,7 @@
                     }
                 };
                 card.innerHTML = `
-                    <div class="weapon-icon-frame">${u.icon}</div>
+                    <div class="weapon-icon-frame">${u.icon || defaultIcons[u.id] || '⚔️'}</div>
                     <div style="flex:1;">
                         <div style="color:#fff; font-weight:bold; font-family:'Cinzel';">${u.name} <span style="color:var(--primary-glow)">(${u.count})</span></div>
                         <div style="font-size:0.75rem; color:var(--text-dim);">+${u.dps} DPS / +${u.clickAdd || 0} Click</div>
@@ -700,7 +691,6 @@
             }
         };
 
-        // Game Loop
         setInterval(() => {
             if (gameState.dps > 0) {
                 gameState.gold += gameState.dps / 10;
